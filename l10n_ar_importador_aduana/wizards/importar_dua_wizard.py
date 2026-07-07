@@ -3,12 +3,12 @@
 # License OPL-1 (https://www.odoo.com/documentation/15.0/legal/licenses.html)
 #
 # Wizard para importar Despacho de Aduana (OM-1993) desde PDF.
-# Versión: 15.0.3.0.0
+# Versión: 19.0.1.0.0
 #
 # Arquitectura: grilla limpia + ajuste atómico quirúrgico post-creación.
 # Garantiza balance contable perfecto y conformidad RG 3685 (ARCA).
 #
-# Ver historial completo en: HISTORIAL_importar_dua_wizard.txt
+# Migrado a Odoo 19: tree → list, attrs → inline, payment_group → payment_bundle.
 
 import base64
 import re
@@ -468,272 +468,127 @@ class ImportarDUAWizard(models.TransientModel):
             )
 
     # =========================================================================
-    # Creación del pago en borrador — integración OCA payment_group (v6.0)
+    # Creación del pago en borrador — payment bundle (l10n_ar_payment_bundle)
     # =========================================================================
 
-    def _obtener_o_crear_receiptbook(self):
+    def _obtener_bundle_journal(self):
         """
-        Busca un Talonario (account.payment.receiptbook) para proveedores.
-        Si no existe ninguno en la base —caso confirmado en aduana_test—,
-        lo crea con secuencia automática.
+        Busca el diario con método 'Payment bundle' para la compañía actual.
+        Si no existe, lanza UserError con instrucciones de instalación.
 
-        Campos confirmados por inspección directa del modelo (shell Odoo):
-          partner_type:    selection ['customer', 'supplier']
-          sequence_type:   selection ['automatic', 'manual']
-          document_type_id: OBLIGATORIO — constraint NOT NULL a nivel de
-                             base de datos (descubierto en runtime: el
-                             create() sin este campo lanza
-                             psycopg2.errors.NotNullViolation).
-          (el modelo NO tiene journal_id — no está atado a un diario)
+        El diario bundle se crea automáticamente al instalar
+        l10n_ar_payment_bundle (post_init_hook) o al activar
+        use_payment_pro en la compañía.
 
-        ⚠️ NOTA FUNCIONAL PENDIENTE DE VALIDACIÓN CONTABLE:
-          Ninguno de los 63 l10n_latam.document.type disponibles en
-          aduana_test tiene internal_type específico para egresos de pago
-          (todos son 'invoice', pensados para ventas/facturación).
-          Se usa el ID correspondiente a "OTROS COMPROBANTES QUE NO CUMPLEN
-          O ESTAN EXCEPTUADOS DE LA R.G. Nº 1415 Y SUS MODIF" (código 99)
-          como PLACEHOLDER TÉCNICO para destrabar el flujo en este entorno
-          de prueba. Antes de producción, CONFIRMAR con el contador cuál
-          es el comprobante real que deben llevar las Órdenes de Pago a
-          proveedores en esta instancia — puede variar según convenios
-          con AFIP o configuración específica de la empresa.
-
-        Retorna el recordset del receiptbook (existente o nuevo), o False
-        si no se puede resolver un document_type_id válido.
+        Retorna el account.journal o levanta UserError.
         """
-        Receiptbook = self.env['account.payment.receiptbook'].sudo()
-
-        receiptbook = Receiptbook.search([
-            ('partner_type', '=', 'supplier'),
-            ('company_id', '=', self.env.company.id),
-        ], limit=1)
-
-        if receiptbook:
-            _logger.info(
-                'v6.1 — Talonario existente reutilizado: %s (ID %s)',
-                receiptbook.name, receiptbook.id,
+        bundle_journal_id = self.env.company._get_bundle_journal('outbound')
+        if not bundle_journal_id:
+            raise UserError(
+                'No se encontró el diario "Payment bundle".\n'
+                'Debe tener instalado l10n_ar_payment_bundle y '
+                'tener activado el uso de Payment Pro en la compañía.'
             )
-            return receiptbook
-
-        # ── Resolver document_type_id obligatorio ────────────────────────────
-        # Búsqueda dinámica por código AFIP 99 (genérico, no hardcodea el ID
-        # numérico de la tabla, que puede variar entre instancias/bases).
-        DocType = self.env['l10n_latam.document.type']
-        doc_type_receiptbook = DocType.search([
-            ('country_id.code', '=', 'AR'),
-            ('code', '=', '99'),
-        ], limit=1)
-
-        if not doc_type_receiptbook:
-            # Fallback: cualquier tipo de documento AR disponible, para no
-            # bloquear el flujo completo — pero se loguea como advertencia
-            # fuerte porque esto requiere revisión contable.
-            doc_type_receiptbook = DocType.search([
-                ('country_id.code', '=', 'AR'),
-            ], limit=1)
-            _logger.warning(
-                'v6.1 — No se encontró tipo de documento código 99 (genérico). '
-                'Usando fallback: %s (ID %s). REVISAR CON CONTADOR antes de '
-                'producción — este campo determina cómo se categoriza el '
-                'comprobante de pago ante AFIP.',
-                doc_type_receiptbook.name if doc_type_receiptbook else 'NINGUNO',
-                doc_type_receiptbook.id if doc_type_receiptbook else 'N/A',
-            )
-
-        if not doc_type_receiptbook:
-            _logger.error(
-                'v6.1 — No existe NINGÚN l10n_latam.document.type para AR. '
-                'Imposible crear el Talonario — cae al flujo diferido.'
-            )
-            return False
-
-        # ── Create() dentro de un savepoint ───────────────────────────────────
-        # Si este create() falla con un error SQL (como el NotNullViolation
-        # de document_type_id que encontramos en aduana_test), Postgres
-        # aborta la transacción completa y CUALQUIER operación posterior
-        # —incluso el message_post() del flujo diferido en action_import_pdf—
-        # fallaría en cascada con InFailedSqlTransaction.
-        # self.env.cr.savepoint() aísla este create(): si falla, sólo se
-        # revierte este bloque puntual y la transacción principal del
-        # wizard (factura + ajuste de asiento + adjunto) sigue intacta.
-        try:
-            with self.env.cr.savepoint():
-                receiptbook = Receiptbook.create({
-                    'name':            'Órdenes de Pago Proveedores - DUA',
-                    'partner_type':    'supplier',
-                    'sequence_type':   'automatic',
-                    'prefix':          '00001-',
-                    'padding':         8,
-                    'company_id':      self.env.company.id,
-                    'document_type_id': doc_type_receiptbook.id,
-                })
-            _logger.info(
-                'v6.1 — Talonario creado al vuelo: %s (ID %s) — '
-                'document_type: %s (⚠️ placeholder, confirmar con contador)',
-                receiptbook.name, receiptbook.id, doc_type_receiptbook.name,
-            )
-            return receiptbook
-        except Exception as e:
-            _logger.error('v6.1 — No se pudo crear el Talonario: %s', e)
-            return False
+        return self.env['account.journal'].browse(bundle_journal_id)
 
     def _crear_pago_borrador(self, invoice, diario_pago, usd, fecha, ref_prov):
         """
-        Crea un account.payment.group (cabecera OCA) con su account.payment
-        hijo, respetando la capa de abstracción de l10n_ar_account_payment_group.
+        Crea un payment bundle (l10n_ar_payment_bundle) en borrador:
+        un main payment (is_main_payment=True, amount=0) con un linked payment
+        que contiene el monto real de la factura.
 
-        CAUSA RAÍZ DEL BUG 'False' (v5.2): el wizard anterior creaba un
-        account.payment suelto. OCA detecta el pago sin grupo y genera un
-        account.payment.group automático por su cuenta, pero ese create()
-        interno busca un receiptbook_id y no encuentra ninguno configurado
-        → el campo name del GRUPO queda en 'False' (fallback silencioso),
-        mientras que el PAGO hijo queda colgado en estado 'draft' porque
-        nunca se invocó ningún método de transición de estado sobre él.
+        Flujo:
+          1) Obtener el diario bundle (Payment multiple) de la compañía
+          2) Crear main payment en borrador (is_main_payment=True, amount=0)
+          3) Crear linked payment con main_payment_id apuntando al main
+          4) No se postea — queda en draft para revisión manual del usuario
+             (a diferencia de v6.x que posteaba y revertía para obtener
+             numeración del receiptbook, porque l10n_ar_payment_bundle
+             genera nombres en action_post() y el usuario puede postear
+             directamente desde la UI del bundle).
 
-        SOLUCIÓN v6.0 — flujo correcto de 3 pasos:
-          1) Asegurar que exista un receiptbook para proveedores
-             (_obtener_o_crear_receiptbook).
-          2) Crear el account.payment.group con receiptbook_id ya asignado
-             y el account.payment hijo inyectado vía payment_ids (one2many),
-             dejando que OCA resuelva name/document_number desde la
-             secuencia del receiptbook — no desde ir.sequence genérica.
-          3) Verificar que tanto el grupo como el pago hijo queden en
-             estado 'draft' (ningún action_post() se invoca).
-
-        Retorna el account.payment.group creado, o False si falla.
+        Retorna el account.payment del main payment, o False si falla.
         """
-        receiptbook = self._obtener_o_crear_receiptbook()
-        if not receiptbook:
-            _logger.warning(
-                'v6.0 — Sin receiptbook disponible — pago no creado. '
-                'Cae al flujo diferido (chatter).'
-            )
+        # ── Validar que l10n_ar_payment_bundle esté instalado ──────────────
+        if 'account.payment' not in self.env.registry:
+            _logger.warning('v19.0 — Modelo account.payment no disponible.')
             return False
 
-        # ── Tipo de documento OCA Argentina (opcional, mismo criterio v5.2) ──
-        doc_type_pago = self.env['l10n_latam.document.type'].search([
-            ('country_id.code', '=', 'AR'),
-            ('name', 'ilike', 'Orden de Pago'),
+        bundle_method = self.env['account.payment.method'].search([
+            ('code', '=', 'payment_bundle'),
+            ('payment_type', '=', 'outbound'),
         ], limit=1)
-        if not doc_type_pago:
-            doc_type_pago = self.env['l10n_latam.document.type'].search([
-                ('country_id.code', '=', 'AR'),
-                ('internal_type', '=', False),
-            ], limit=1)
-
-        # ── Construir el account.payment hijo como comando one2many ─────────
-        # NO se asigna 'name' manualmente: el receiptbook resuelve la
-        # numeración real al crear el grupo. Forzar 'name' aquí reproduciría
-        # el mismo bug que en v5.2 (numeración huérfana sin relación al
-        # receiptbook real).
-        payment_line_vals = {
-            'payment_type':  'outbound',
-            'partner_type':  'supplier',
-            'partner_id':    self.partner_id.id,
-            'journal_id':    diario_pago.id,
-            'currency_id':   usd.id,
-            'amount':        invoice.amount_total,
-            'date':          fecha or fields.Date.today(),
-            'ref':           f"DUA {ref_prov}",
-        }
-        if doc_type_pago:
-            payment_line_vals['l10n_latam_document_type_id'] = doc_type_pago.id
-
-        # ── Crear el account.payment.group con el pago inyectado ────────────
-        group_vals = {
-            'partner_id':     self.partner_id.id,
-            'partner_type':   'supplier',
-            'currency_id':    usd.id,
-            'payment_date':   fecha or fields.Date.today(),
-            'communication':  f"DUA {ref_prov}",
-            'receiptbook_id': receiptbook.id,
-            'payment_ids':    [(0, 0, payment_line_vals)],
-        }
-
-        # Mismo motivo que en _obtener_o_crear_receiptbook(): aislar este
-        # create() en un savepoint evita que un fallo SQL aquí aborte toda
-        # la transacción del wizard (factura + ajuste de asiento + adjunto
-        # ya creados con éxito en pasos anteriores de action_import_pdf).
-        try:
-            with self.env.cr.savepoint():
-                payment_group = self.env['account.payment.group'].create(group_vals)
-        except Exception as e:
-            _logger.warning('v6.2 — Error en create() del payment.group: %s', e)
+        if not bundle_method:
+            _logger.warning(
+                'v19.0 — Método "payment_bundle" no encontrado. '
+                '¿l10n_ar_payment_bundle instalado?'
+            )
             return False
 
-        # ── v6.2: disparar confirm() para generar numeración del receiptbook ──
-        #
-        # OCA NO genera name/document_number en el create() sino en confirm().
-        # Verificado por inspección: _compute_document_number y
-        # _compute_next_number se disparan en la transición que confirm()
-        # orquesta internamente sobre la secuencia del receiptbook_id.
-        #
-        # Flujo:
-        #   1) confirm() → asigna document_number desde receiptbook.sequence_id
-        #                   → estado pasa a 'confirmed' (o 'posted' según versión)
-        #   2) write({'state': 'draft'}) → revierte al estado borrador para que
-        #      el usuario valide manualmente desde la UI sin bloqueos
-        #
-        # El document_number (y por ende name) quedan asignados permanentemente
-        # aunque el estado vuelva a draft — son campos de escritura directa,
-        # no se recalculan al revertir el estado.
+        try:
+            bundle_journal = self._obtener_bundle_journal()
+        except UserError as e:
+            _logger.warning('v19.0 — %s', e)
+            return False
+
+        # El main payment se crea con el diario bundle. El linked payment
+        # se crea con el diario de pago real del usuario (MAL01, etc.).
+        # Ambos en draft; el usuario revisa y postea desde la UI.
         try:
             with self.env.cr.savepoint():
-                payment_group.post()
-                _logger.info(
-                    'v6.3 — post() ejecutado — name generado: %s (ID %s)',
-                    payment_group.name, payment_group.id,
-                )
-                # Revertir a borrador para validación manual del usuario
-                payment_group.action_draft()
+                # 1) Main payment (amount=0, is_main_payment=True)
+                main_payment = self.env['account.payment'].create({
+                    'payment_type':                'outbound',
+                    'partner_type':                'supplier',
+                    'partner_id':                  self.partner_id.id,
+                    'journal_id':                  bundle_journal.id,
+                    'currency_id':                 usd.id,
+                    'amount':                      0.0,
+                    'is_main_payment':             True,
+                    'date':                        fecha or fields.Date.today(),
+                    'ref':                         f'DUA {ref_prov}',
+                })
+
+                # 2) Linked payment (monto real)
+                linked_payment = self.env['account.payment'].create({
+                    'payment_type':                'outbound',
+                    'partner_type':                'supplier',
+                    'partner_id':                  self.partner_id.id,
+                    'journal_id':                  diario_pago.id,
+                    'currency_id':                 usd.id,
+                    'amount':                      invoice.amount_total,
+                    'main_payment_id':             main_payment.id,
+                    'date':                        fecha or fields.Date.today(),
+                    'ref':                         f'DUA {ref_prov} - pago',
+                })
 
                 _logger.info(
-                    'v6.2 — Estado revertido a draft — '
-                    'grupo: %s pagos hijo: %s',
-                    payment_group.state,
-                    payment_group.payment_ids.mapped('state'),
+                    'v19.0 — Payment bundle creado: main=%s (ID %s), '
+                    'linked=%s (ID %s), total=USD %.2f',
+                    main_payment.name, main_payment.id,
+                    linked_payment.name, linked_payment.id,
+                    invoice.amount_total,
                 )
+
+            return main_payment
+
         except Exception as e:
-            _logger.warning(
-                'v6.2 — confirm()/revert falló (ID %s): %s — '
-                'el grupo queda en el estado que dejó confirm()',
-                payment_group.id, e,
-            )
-
-        # ── Verificación de integridad post-creación ─────────────────────────
-        estado_grupo = payment_group.state
-        pagos_hijo   = payment_group.payment_ids
-        estados_hijo = pagos_hijo.mapped('state')
-
-        if payment_group.name in (False, 'False', ''):
-            _logger.warning(
-                'v6.2 — name sigue False en grupo ID %s — '
-                'revisar configuración de secuencia del receiptbook "%s".',
-                payment_group.id, receiptbook.name,
-            )
-        else:
-            _logger.info(
-                'v6.2 — Payment Group OK: %s (ID %s) '
-                '— estado: %s — pagos hijo: %s (estados: %s)',
-                payment_group.name, payment_group.id,
-                estado_grupo, len(pagos_hijo), estados_hijo,
-            )
-
-        return payment_group
+            _logger.warning('v19.0 — Error creando payment bundle: %s', e)
+            return False
 
     # =========================================================================
-    # Acción principal — v5.2 COMERCIAL
+    # Acción principal — v19.0
     # =========================================================================
 
     def action_import_pdf(self):
         """
         Procesa el PDF del DUA y crea la factura de proveedor en borrador.
 
-        Flujo v5.2:
+        Flujo:
           FASE 1 — Extracción, tasa de cambio, impuestos
           FASE 2 — Factura con grilla limpia (010/011/061/500)
           FASE 3 — _ajustar_asiento_dua(): corrige tax_lines + payable
-          FASE 4 — PDF adjunto + pago en borrador
+          FASE 4 — PDF adjunto + pago en borrador (l10n_ar_payment_bundle)
         """
         self.ensure_one()
 
@@ -988,40 +843,27 @@ class ImportarDUAWizard(models.TransientModel):
         except Exception as e:
             _logger.warning('No se pudo adjuntar el PDF: %s', e)
 
-        # ── FASE 4B: Pago — flujo híbrido v6.0 (account.payment.group OCA) ──────
+        # ── FASE 4B: Pago — flujo bundle v19.0 (l10n_ar_payment_bundle) ────────
         diario_pago = self.env['account.journal'].search(
             [('code', '=', 'MAL01')], limit=1
         )
 
         if self.registrar_pago_auto:
-            # ── Flujo Automático Reparado ─────────────────────────────────────
-            # Crea el account.payment.group (cabecera OCA) con su pago hijo,
-            # resolviendo el receiptbook antes del create() para evitar el
-            # bug 'False' en el name del grupo.
             if diario_pago:
-                # Capturar el nombre ANTES de invocar _crear_pago_borrador().
-                # Si el create() interno lanza una excepción SQL (como el
-                # NotNullViolation de document_type_id que encontramos en
-                # aduana_test), la transacción de Postgres queda abortada y
-                # cualquier lectura posterior de campos -incluso de un
-                # recordset ya resuelto como diario_pago- puede fallar con
-                # CacheMiss/KeyError en cascada. Guardar el string ahora
-                # evita ese problema en el mensaje de fallback.
                 diario_pago_nombre = diario_pago.name
 
-                payment_group = self._crear_pago_borrador(
+                main_payment = self._crear_pago_borrador(
                     invoice    = invoice,
                     diario_pago= diario_pago,
                     usd        = usd,
                     fecha      = fecha,
                     ref_prov   = data['ref_prov'],
                 )
-                if not payment_group:
-                    # Sin receiptbook disponible → caer al flujo diferido
+                if not main_payment:
                     invoice.message_post(
                         body=(
                             '<b>⚠️ Pago automático no creado:</b> '
-                            'no se pudo generar el Talonario de Pagos. '
+                            'no se pudo crear el payment bundle. '
                             'Por favor, registre el pago manualmente desde '
                             'el botón <b>Registrar Pago</b> usando el '
                             f'diario <b>{diario_pago_nombre}</b> por '
@@ -1029,7 +871,7 @@ class ImportarDUAWizard(models.TransientModel):
                         )
                     )
             else:
-                _logger.warning('v6.1 — Diario MAL01 no encontrado.')
+                _logger.warning('v19.0 — Diario MAL01 no encontrado.')
                 invoice.message_post(
                     body=(
                         '<b>⚠️ Pago automático no creado:</b> '
@@ -1040,8 +882,6 @@ class ImportarDUAWizard(models.TransientModel):
 
         else:
             # ── Flujo Estándar Diferido ───────────────────────────────────────
-            # Solo notifica en el chatter. Tesorería crea el pago desde la UI
-            # con todos los validadores activos de la localización OCA Argentina.
             diario_nombre = diario_pago.name if diario_pago else 'MAL01'
             invoice.message_post(
                 body=(
@@ -1054,7 +894,7 @@ class ImportarDUAWizard(models.TransientModel):
                 )
             )
             _logger.info(
-                'v5.2 — Flujo diferido: chatter notificado en factura ID %s.',
+                'v19.0 — Flujo diferido: chatter notificado en factura ID %s.',
                 invoice.id,
             )
 

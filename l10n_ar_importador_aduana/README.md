@@ -1,13 +1,13 @@
 # Argentina Importación Aduana (DUA)
 
 [![License: OPL-1](https://img.shields.io/badge/License-OPL--1-blue.svg)](https://www.odoo.com/documentation/15.0/legal/licenses.html)
-[![Odoo Version](https://img.shields.io/badge/Odoo-15.0-purple.svg)](https://www.odoo.com)
+[![Odoo Version](https://img.shields.io/badge/Odoo-19.0-purple.svg)](https://www.odoo.com)
 [![Localización](https://img.shields.io/badge/Localización-Argentina-lightblue.svg)](https://github.com/ingadhoc)
 
 ## Descripción
 
 Automatiza la lectura, interpretación fiscal e inyección contable de los
-Despachos de Importación (Formulario OM-1993 / SIM) en Odoo v15.
+Despachos de Importación (Formulario OM-1993 / SIM) en Odoo v19.
 
 Reemplaza la carga manual de más de 15 líneas impositivas, eliminando el
 error humano y garantizando conformidad con el validador del **Portal IVA
@@ -34,9 +34,9 @@ de ARCA (RG 3685)**.
 ## Requisitos
 
 ### Odoo
-- Odoo 15.0 Community o Enterprise
+- Odoo 19.0 Community o Enterprise
 - Localización Argentina (`l10n_ar`) instalada y configurada
-- Módulo `account_payment_group` (OCA/ingadhoc) recomendado para pagos
+- Módulo `l10n_ar_payment_bundle` (capirellib/account-payment) recomendado para pagos
 
 ### Python
 ```
@@ -124,6 +124,7 @@ FASE 2 — Ajuste quirúrgico post-creación
 
 | Versión | Descripción |
 |---------|-------------|
+| 19.0.1.0.0 | Migración a Odoo 19: attrs → inline, payment_group → payment_bundle |
 | 15.0.3.0.0 | Cuentas configurables por empresa, UserError impuestos no clasificados, SIM → No Gravado |
 | 15.0.2.0.0 | Ajuste atómico quirúrgico completo, tax_base_amount base inversa real |
 | 15.0.1.0.0 | Versión inicial |

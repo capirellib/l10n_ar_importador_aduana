@@ -20,19 +20,16 @@ Genera asiento con balance contable perfecto y conformidad con el validador ARCA
 
 ### Paso 1 — Instalar la dependencia Python `pdfplumber`
 
-**En Windows — CMD como Administrador:**
-
-```cmd
-"C:\Program Files\Odoo 15.0.x\python\python.exe" -m pip install pdfplumber
-```
-
-> Reemplazá `15.0.x` por la versión exacta de tu instalación. Si ese Python no funciona, usá:
-> `"C:\Program Files\Odoo 15.0.x\server\venv\Scripts\python.exe" -m pip install pdfplumber`
-
-**En Linux (Ubuntu/Debian):**
+**En Linux (Debian 13 / Ubuntu 24.04):**
 
 ```bash
 sudo /opt/odoo/venv/bin/pip install pdfplumber
+```
+
+**En Windows — CMD como Administrador:**
+
+```cmd
+"C:\Program Files\Odoo 19.0\python\python.exe" -m pip install pdfplumber
 ```
 
 **Verificación:**
@@ -43,14 +40,14 @@ python -c "import pdfplumber; print(pdfplumber.__version__)"
 
 ### Paso 2 — Copiar el módulo al directorio de addons
 
-**Windows:**
-```
-C:\Program Files\Odoo 15.0.x\server\odoo\addons\l10n_ar_importador_aduana\
-```
-
 **Linux:**
 ```
 /opt/odoo/addons/l10n_ar_importador_aduana/
+```
+
+**Windows:**
+```
+C:\Program Files\Odoo 19.0\server\odoo\addons\l10n_ar_importador_aduana\
 ```
 
 ### Paso 3 — Reiniciar el servicio Odoo
@@ -75,8 +72,8 @@ sudo systemctl restart odoo
 Ir a **Aplicaciones** e instalar en este orden:
 
 1. **Argentina - Contabilidad** (`l10n_ar`) — localización argentina
-2. **Argentinian Accounting UX** (`l10n_ar_ux`) — extensiones contables requeridas
-3. **Argentina Importación Aduana** (`l10n_ar_importador_aduana`) — este módulo
+2. **Argentina Importación Aduana** (`l10n_ar_importador_aduana`) — este módulo
+3. **Argentinean Payment Bundle** (`l10n_ar_payment_bundle`) — opcional, para pago automático
 
 > Si no aparecen, clic en **Actualizar lista de aplicaciones** primero.
 
@@ -180,4 +177,4 @@ Los impuestos de Ingresos Brutos por jurisdicción provincial vienen incluidos c
 
 **Author:** ArgenCode Tech  
 **License:** OPL-1  
-**Version:** 15.0.3.0.0
+**Version:** 19.0.1.0.0

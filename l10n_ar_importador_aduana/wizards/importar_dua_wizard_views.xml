@@ -30,7 +30,7 @@
 
                 <!-- Datos extraídos (feedback visual) -->
                 <group string="Datos extraídos del PDF"
-                       attrs="{'invisible': [('extracted_ref', '=', False)]}">
+                       invisible="not extracted_ref">
                     <field name="extracted_ref" string="Nº Despacho"/>
                     <field name="extracted_date" string="Fecha"/>
                 </group>

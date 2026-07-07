@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Argentina Importación Aduana',
-    'version': '15.0.3.0.1',
+    'version': '19.0.1.0.0',
     'category': 'Accounting/Localizations',
     'summary': 'Carga automática de Despachos de Aduana (OM-1993) desde PDF con liquidación fiscal RG 3685',
     'description': """
@@ -17,13 +17,15 @@ extrayendo en memoria y desglosando de forma automática:
 
 Genera la Factura de Proveedor en estado borrador con ajuste atómico quirúrgico
 garantizando balance contable perfecto y conformidad con el validador ARCA (RG 3685).
+
+Pago automático opcional vía l10n_ar_payment_bundle (account_payment_pro).
 """,
     'author': 'ArgenCode Tech',
     'website': 'https://argencodetech.com',
     'depends': [
         'base',
         'account',
-        'l10n_ar',      
+        'l10n_ar',
     ],
     'data': [
         'data/account_data.xml',
