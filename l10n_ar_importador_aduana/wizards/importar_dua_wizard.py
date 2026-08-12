@@ -370,11 +370,11 @@ class ImportarDUAWizard(models.TransientModel):
         # Clasificar líneas del asiento
         lineas_gasto   = invoice.line_ids.filtered(
             lambda l: not l.tax_line_id
-                      and l.account_id.user_type_id.type != 'payable'
+                      and l.account_id.account_type != 'liability_payable'
         )
         lineas_tax     = invoice.line_ids.filtered(lambda l: bool(l.tax_line_id))
         linea_payable  = invoice.line_ids.filtered(
-            lambda l: l.account_id.user_type_id.type == 'payable'
+            lambda l: l.account_id.account_type == 'liability_payable'
         )[:1]
         
         # Pendiente 2 — detectar impuestos no clasificados (OCA pattern)
