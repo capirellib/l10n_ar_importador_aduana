@@ -8,10 +8,8 @@
             <form string="Importar Despacho de Aduana">
                 <group>
                     <group>
-                        <field name="file_data" filename="file_name"
-                               widget="binary"
-                               placeholder="Arrastre o seleccione el PDF del DUA"/>
                         <field name="file_name" invisible="1"/>
+                        <field name="file_data" filename="file_name"/>
                     </group>
                     <group>
                         <field name="partner_id"
