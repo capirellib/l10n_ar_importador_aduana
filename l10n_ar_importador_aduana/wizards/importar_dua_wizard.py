@@ -49,6 +49,7 @@ class ImportarDUAWizard(models.TransientModel):
 
     file_data = fields.Binary(
         string='Archivo PDF del DUA',
+        required=False,
         help='Seleccione el archivo PDF del despacho de importación',
     )
     file_name = fields.Char(string='Nombre del Archivo')
