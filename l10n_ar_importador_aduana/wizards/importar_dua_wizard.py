@@ -207,22 +207,54 @@ class ImportarDUAWizard(models.TransientModel):
           tasa        — float  pesos por dólar (informativa, no se usa para ARS)
           iibb_montos — {cod: monto_usd}  percepciones IIBB por provincia
         """
-        try:
-            import pdfplumber
-        except ImportError:
-            raise UserError(
-                'Falta la librería pdfplumber.\n'
-                'Instálela con:  pip install pdfplumber'
-            )
-
         pdf_bytes = base64.b64decode(pdf_binary)
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            textos = [p.extract_text() or '' for p in pdf.pages]
+        textos = []
+
+        # 1. Primary: Direct pdfminer.six extraction (native Odoo requirement)
+        try:
+            from pdfminer.high_level import extract_pages
+            from pdfminer.layout import LTTextContainer
+            for page_layout in extract_pages(io.BytesIO(pdf_bytes)):
+                page_text = ''.join(
+                    element.get_text()
+                    for element in page_layout
+                    if isinstance(element, LTTextContainer)
+                )
+                textos.append(page_text)
+        except Exception as err:
+            _logger.warning("pdfminer.six extraction fallback triggered: %s", err)
+            textos = []
+
+        # 2. Fallback: pypdf (Odoo 17/18/19 core)
+        if not textos or not any(textos):
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+                textos = [page.extract_text() or '' for page in reader.pages]
+            except Exception:
+                textos = []
+
+        # 3. Fallback: PyPDF2 (Odoo 15/16 core)
+        if not textos or not any(textos):
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+                textos = [page.extract_text() or '' for page in reader.pages]
+            except Exception:
+                textos = []
+
+        # 4. Fallback: pdfplumber if present
+        if not textos or not any(textos):
+            try:
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                    textos = [p.extract_text() or '' for p in pdf.pages]
+            except Exception:
+                textos = []
 
         if not textos or not any(textos):
             raise UserError(
-                'No se pudo extraer texto del PDF.\n'
-                'Verifique que no esté protegido ni sea imagen escaneada.'
+                _('Could not extract text from PDF. Verify that it is not password protected or a scanned image.')
             )
 
         p1 = textos[0] if textos else ''

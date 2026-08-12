@@ -34,7 +34,7 @@ Pago automático opcional vía l10n_ar_payment_bundle (account_payment_pro).
         'wizards/importar_dua_wizard_views.xml',
     ],
     'external_dependencies': {
-        'python': ['pdfplumber'],
+        'python': ['pdfminer'],
     },
     'images': ['static/description/banner.png'],
     'installable': True,
