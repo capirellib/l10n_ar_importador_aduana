@@ -59,7 +59,7 @@ class ImportarDUAWizard(models.TransientModel):
         'res.partner',
         string='Proveedor',
         required=True,
-        domain=[('supplier_rank', '>', 0)],
+        domain="['|', ('parent_id', '=', False), ('is_company', '=', True)]",
         help='Proveedor asociado al despacho',
     )
 
@@ -170,6 +170,15 @@ class ImportarDUAWizard(models.TransientModel):
     # =========================================================================
     # Defaults
     # =========================================================================
+
+    @api.model
+    def default_get(self, fields_list):
+        res = super().default_get(fields_list)
+        if self.env.context.get('active_model') == 'account.move' and self.env.context.get('active_id'):
+            move = self.env['account.move'].browse(self.env.context['active_id'])
+            if move.partner_id and 'partner_id' in fields_list and not res.get('partner_id'):
+                res['partner_id'] = move.partner_id.id
+        return res
 
     def _get_default_journal(self):
         journal = self.env['account.journal'].search(
